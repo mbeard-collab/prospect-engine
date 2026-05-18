@@ -13,3 +13,8 @@
   NODE_VERSION = "20"
   # The build runs on Linux; pin npm's optional native deps for sharp etc.
   NPM_FLAGS = "--include=optional"
+  # NEXT_PUBLIC_* env vars are intentionally inlined into the client bundle.
+  # Supabase's anon key + project URL are RLS-gated and meant to be exposed,
+  # so their presence in build output is expected. Without this omit list,
+  # Netlify's secrets scanner fails the build.
+  SECRETS_SCAN_OMIT_KEYS = "NEXT_PUBLIC_SUPABASE_URL,NEXT_PUBLIC_SUPABASE_ANON_KEY"
