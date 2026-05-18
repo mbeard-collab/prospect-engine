@@ -29,6 +29,7 @@ import {
   getContactProvider,
   getSignalProvider,
 } from "@/lib/enrichment";
+import { getSearchProvider } from "@/lib/search";
 
 type RunAccountRow = {
   id: string;
@@ -317,7 +318,7 @@ export default async function RunDetailPage({
     };
   });
 
-  const searchProviderName = process.env.BRAVE_API_KEY?.trim() ? "brave" : "mock";
+  const searchProviderName = getSearchProvider().name;
   const hasAnthropicKey = !!process.env.PROSPECT_ANTHROPIC_KEY?.trim();
   const contactProviderName = getContactProvider().name;
   const signalProviderName = getSignalProvider().name;
