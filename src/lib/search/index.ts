@@ -1,5 +1,5 @@
 import "server-only";
-import { createBraveProvider } from "./brave";
+import { createAnthropicSearchProvider } from "./anthropic";
 import { createMockProvider } from "./mock";
 import type { SearchProvider } from "./types";
 
@@ -9,7 +9,9 @@ let cached: SearchProvider | null = null;
 
 export function getSearchProvider(): SearchProvider {
   if (cached) return cached;
-  const key = process.env.BRAVE_API_KEY?.trim();
-  cached = key ? createBraveProvider(key) : createMockProvider();
+  const anthropicKey = process.env.PROSPECT_ANTHROPIC_KEY?.trim();
+  cached = anthropicKey
+    ? createAnthropicSearchProvider({ anthropicKey })
+    : createMockProvider();
   return cached;
 }

@@ -61,6 +61,13 @@ async function signJwt(args: {
 
 type CachedToken = { token: string; expiresAt: number };
 let cachedToken: CachedToken | null = null;
+// Single in-flight promise to dedupe concurrent /authenticate callers. With
+// the Stage 3 aggregator now firing 4 providers × 3 companies in parallel, a
+// cold start would otherwise trigger ~3 simultaneous /authenticate requests,
+// which ZoomInfo's auth endpoint rate-limits (HTTP 429). Routing all
+// concurrent callers through the same Promise means only one auth request
+// goes out per cold start regardless of how many threads are waiting.
+let inFlightToken: Promise<string> | null = null;
 
 async function getAccessToken(args: {
   privateKeyPem: string;
@@ -70,21 +77,35 @@ async function getAccessToken(args: {
   if (cachedToken && Date.now() < cachedToken.expiresAt) {
     return cachedToken.token;
   }
-  const jwt = await signJwt(args);
-  const res = await fetch(AUTH_URL, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${jwt}`, Accept: "application/json" },
-  });
-  const text = await res.text();
-  if (!res.ok) {
-    throw new Error(`ZoomInfo /authenticate HTTP ${res.status}: ${text.slice(0, 400)}`);
-  }
-  const data = JSON.parse(text) as { jwt?: string };
-  if (!data.jwt) {
-    throw new Error(`ZoomInfo /authenticate: missing 'jwt' in response`);
-  }
-  cachedToken = { token: data.jwt, expiresAt: Date.now() + TOKEN_TTL_MS };
-  return data.jwt;
+  if (inFlightToken) return inFlightToken;
+
+  inFlightToken = (async () => {
+    try {
+      const jwt = await signJwt(args);
+      const res = await fetch(AUTH_URL, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${jwt}`, Accept: "application/json" },
+      });
+      const text = await res.text();
+      if (!res.ok) {
+        throw new Error(
+          `ZoomInfo /authenticate HTTP ${res.status}: ${text.slice(0, 400)}`,
+        );
+      }
+      const data = JSON.parse(text) as { jwt?: string };
+      if (!data.jwt) {
+        throw new Error(`ZoomInfo /authenticate: missing 'jwt' in response`);
+      }
+      cachedToken = { token: data.jwt, expiresAt: Date.now() + TOKEN_TTL_MS };
+      return data.jwt;
+    } finally {
+      // Clear so failure isn't sticky and subsequent calls can retry. Success
+      // doesn't matter — the cache now holds the token for ~55 min.
+      inFlightToken = null;
+    }
+  })();
+
+  return inFlightToken;
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -472,6 +493,7 @@ export function createZoomInfoRestProvider(args: {
           email: enr?.email ?? null,
           linkedin: null, // not available on this account's plan
           rationale: p.rationale,
+          sources: ["zoominfo-rest"],
         });
       }
       return out;

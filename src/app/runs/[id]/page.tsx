@@ -70,6 +70,10 @@ type ContactDbRow = {
   email: string | null;
   linkedin: string | null;
   tier: "exec" | "manager" | "ic" | null;
+  // Provider provenance. One entry per source that found this contact;
+  // multi-source = corroborated. Possible values: zoominfo-rest, linkedin,
+  // company-website, govspend-contracts, zoominfo-mcp, mock.
+  sources: string[] | null;
   // SDR-facing notes generated at Stage 3 time. Null when tailoring was
   // skipped or failed (rare — best-effort, doesn't block contact insert).
   outreach_angle: string | null;
@@ -180,7 +184,7 @@ export default async function RunDetailPage({
       supabase
         .from("contacts")
         .select(
-          "company_id, name, title, email, linkedin, tier, outreach_angle, likely_challenge, fetched_at",
+          "company_id, name, title, email, linkedin, tier, sources, outreach_angle, likely_challenge, fetched_at",
         )
         .in("company_id", companyIds)
         .order("fetched_at", { ascending: false }),
@@ -277,6 +281,7 @@ export default async function RunDetailPage({
           tier: c.tier!,
           email: c.email,
           linkedin: c.linkedin,
+          sources: c.sources ?? [],
           outreachAngle: c.outreach_angle,
           likelyChallenge: c.likely_challenge,
         })),

@@ -1,33 +1,38 @@
 import "server-only";
 import type { ContactProvider, ContactTier, EnrichedContact } from "./types";
 
-// Contact finder backed by Anthropic's server-side web_search tool. Unlike the
-// Brave version (custom tool, multi-turn client loop), this uses a single API
-// call — Anthropic runs the searches internally and gives us the final answer.
+// Contact finder constrained to LinkedIn. Anthropic's server-side web_search
+// tool with queries anchored to site:linkedin.com/in. Mirrors what an SDR
+// does as step 3: "who's actually listed on LinkedIn as working there in
+// the right roles?"
 //
-// Generally better LinkedIn / small-company coverage than Brave's index, but
-// each search costs ~$0.01 in Anthropic credits, so we use this as the first
-// fallback when ZoomInfo whiffs and let Brave be a cheaper secondary.
+// Strengths: most accurate for current titles + public-sector / sales role
+// specificity. LinkedIn URLs come back populated. Weaknesses: no emails;
+// some profiles are stale (people change jobs but don't update). Worth
+// pairing with the company-website provider (which confirms employment via
+// the company's own site).
 
 const ANTHROPIC_ENDPOINT = "https://api.anthropic.com/v1/messages";
 const MODEL = "claude-sonnet-4-6";
 const MAX_TOKENS = 2048;
-const MAX_SEARCHES = 5;
+const MAX_SEARCHES = 4;
+const PROVIDER_NAME = "linkedin";
 
 const VALID_TIERS: ReadonlyArray<ContactTier> = ["exec", "manager", "ic"];
 
-const SYSTEM_PROMPT = `You are an SDR at GovSpend (procurement-data SaaS for B2B vendors selling into US state/local/education agencies) finding sales contacts at a prospect company.
+const SYSTEM_PROMPT = `You are an SDR at GovSpend (procurement-data SaaS for B2B vendors selling into US state/local/education agencies) finding sales contacts at a prospect company by searching LinkedIn.
 
-Use your web_search tool to find current employees with sales / business development / public-sector titles. Helpful query patterns:
-- "[Company Name]" LinkedIn site:linkedin.com/in
-- "[Company Name]" VP Sales OR Director OR President
-- "[Company Name]" leadership team
-- "[Company Name]" public sector OR government
-- Direct fetch of [website]/about or /team
+Use web_search with queries strictly anchored to LinkedIn. Helpful patterns:
+- site:linkedin.com/in "[Company Name]" "VP Sales"
+- site:linkedin.com/in "[Company Name]" "Director" "Public Sector"
+- site:linkedin.com/in "[Company Name]" "Government Sales"
+- site:linkedin.com/in "[Company Name]" CRO OR CSO OR President
+- site:linkedin.com/in "[Company Name]" SLED OR "State and Local"
+- site:linkedin.com/in "[Company Name]" "Account Executive"
 
-Make up to ${MAX_SEARCHES} searches. Vary the query if first results are thin.
+Make up to ${MAX_SEARCHES} searches. Vary the query if first results are thin. STRONGLY prefer queries with site:linkedin.com/in over generic web searches.
 
-GOAL: pick up to 3 contacts:
+GOAL: pick up to 3 contacts visible on LinkedIn:
 - exec: CRO, CSO, CGO, CCO, President, CEO, VP Sales, VP Public Sector, VP Government Sales, GM, Chief
 - manager: Director of Sales, Director of Public Sector, Director of Government Sales, Capture Director, Sales Manager
 - ic: Government AE, Public Sector AE, SLED AE, Account Executive, BDR, Capture Manager
@@ -35,25 +40,24 @@ GOAL: pick up to 3 contacts:
 Prioritize public-sector / SLED / government titles when available.
 
 RULES:
-- Only include contacts you actually found in search results — DO NOT invent names.
-- LinkedIn URL: only include if you saw it in the results.
-- If you find a name and you're confident, include them even if title is from a less-than-perfect source.
-- If no good fit at a tier, omit that tier.
+- Only include contacts whose LinkedIn profile actually showed up in search results — no inferences from press releases or company websites. If you can't return their linkedin URL, you didn't find them on LinkedIn.
+- The LinkedIn URL is REQUIRED — leave email null, but linkedin must be the canonical /in/{slug} URL you saw.
+- Skip people whose LinkedIn says they LEFT the company (look for "Former" / past tense).
 
 OUTPUT (after your final search, send ONLY this JSON, no prose):
 {
   "contacts": [
     {
       "name": "First Last",
-      "title": "Their job title",
+      "title": "Their current LinkedIn headline / job title",
       "tier": "exec" | "manager" | "ic",
-      "linkedin": string | null,
-      "rationale": "one sentence on why this person, citing the source you found them in"
+      "linkedin": "https://linkedin.com/in/...",
+      "rationale": "one sentence on what their LinkedIn says — title + tenure if visible"
     }
   ]
 }
 
-If you can't find anyone real: {"contacts": []}`;
+If you can't find anyone on LinkedIn: {"contacts": []}`;
 
 type AnthropicContentBlock =
   | { type: "text"; text: string }
@@ -95,16 +99,17 @@ function parseContactsJson(text: string): EnrichedContact[] {
       email: null,
       linkedin: (c.linkedin as string | null) ?? null,
       rationale: (c.rationale as string | null) ?? null,
+      sources: [PROVIDER_NAME],
     });
   }
   return out;
 }
 
-export function createAnthropicWebSearchContactsProvider(args: {
+export function createLinkedinContactsProvider(args: {
   anthropicKey: string;
 }): ContactProvider {
   return {
-    name: "anthropic-web-search",
+    name: PROVIDER_NAME,
     async fetchContacts({
       companyName,
       website,
@@ -113,11 +118,11 @@ export function createAnthropicWebSearchContactsProvider(args: {
     }): Promise<EnrichedContact[]> {
       const userPrompt = [
         `Prospect company: ${companyName}`,
-        website ? `Website: ${website}` : null,
+        website ? `Website (for disambiguation only): ${website}` : null,
         industryGuess ? `Industry hint: ${industryGuess}` : null,
         primaryValueDriver ? `Primary value driver: ${primaryValueDriver}` : null,
         "",
-        `Find up to 3 contacts at ${companyName} for public-sector outreach. Use web_search, then output the JSON.`,
+        `Find up to 3 contacts at ${companyName} via LinkedIn. Use web_search with site:linkedin.com/in queries, then output the JSON.`,
       ]
         .filter(Boolean)
         .join("\n");
@@ -149,19 +154,16 @@ export function createAnthropicWebSearchContactsProvider(args: {
       const text = await res.text();
       if (!res.ok) {
         throw new Error(
-          `Anthropic web_search HTTP ${res.status}: ${text.slice(0, 300)}`,
+          `Anthropic linkedin HTTP ${res.status}: ${text.slice(0, 300)}`,
         );
       }
       const data = JSON.parse(text) as AnthropicResponse;
       if (data.type === "error") {
         throw new Error(
-          `Anthropic web_search error: ${data.error?.type} - ${data.error?.message}`,
+          `Anthropic linkedin error: ${data.error?.type} - ${data.error?.message}`,
         );
       }
 
-      // Anthropic's web_search is server-side: response contains text blocks
-      // plus internal tool_use/tool_result blocks we can ignore. We just want
-      // the final text the model emitted.
       const outText = (data.content ?? [])
         .map((b) => (b.type === "text" ? (b as { text: string }).text : ""))
         .join("")

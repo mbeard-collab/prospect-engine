@@ -24,12 +24,13 @@ import {
 } from "@/lib/email/anthropic";
 import type { ContactTier, DraftInput } from "@/lib/email/prompt";
 
-// Stage 2 batch size: 1 (Brave is rate-limited to 1 rps anyway).
+// Stage 2 batch size: 3 (Anthropic web_search has no per-second cap; the only
+// throttle is the Anthropic API rate limit which is way above 3 rps).
 // Stage 3 batch size: 3 (run 3 enrichments in parallel — see CONCURRENCY).
 //   Trade-off: progress bar advances in chunks of 3 instead of per item.
-//   With Anthropic web_search fallback taking 20-30 sec per slow prospect,
-//   parallelism cuts wall time ~3x.
-const BATCH_SIZE = 1;
+//   With Anthropic web_search taking 10-20 sec per call, parallelism is
+//   essential — sequential would be ~20 min for a 77-row CSV.
+const BATCH_SIZE = 3;
 const STAGE3_BATCH_SIZE = 3;
 const CACHE_TTL_DAYS = 90;
 const CONTACTS_TTL_DAYS = 30;
@@ -45,10 +46,7 @@ const STAGE25_CONCURRENCY = 3;
 // hyper-narrow scope. Excludes Low Fit (rubric said no) and Needs Review
 // (rubric said evidence was too thin to score confidently).
 const ENRICHMENT_TIERS = ["tier_1", "tier_2", "tier_3"] as const;
-// Brave free tier is strictly 1 req/sec. Send Stage 2 calls sequentially.
-const BRAVE_SEQUENTIAL = true;
 const CONCURRENCY = 3;
-const BRAVE_RPS_SLEEP_MS = 1100;
 
 type AccountRow = {
   id: string;
@@ -72,8 +70,6 @@ export type Stage2Result = {
   errors: Array<{ company: string; message: string }>;
   currentCompany?: string | null;
 };
-
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 export async function runStage2Batch(runId: string): Promise<Stage2Result> {
   const { supabase } = await verifySession();
@@ -110,19 +106,16 @@ export async function runStage2Batch(runId: string): Promise<Stage2Result> {
   const batch = unprocessed.slice(0, BATCH_SIZE);
   const currentCompany = batch[0]?.companies?.display_name ?? null;
   const provider = getSearchProvider();
-  const usingRealApi = provider.name === "brave";
+  // "Real" search provider = anything that's not the mock. With Brave gone,
+  // this is true whenever a Anthropic key is configured.
+  const usingRealApi = provider.name !== "mock";
   const errors: Stage2Result["errors"] = [];
 
   // Mark the run as running while we work.
   await supabase.from("runs").update({ status: "running" }).eq("id", runId);
 
-  // Brave free tier: 1 req/sec. Mock: no limit. Either way we throttle below.
-  const effectiveConcurrency =
-    usingRealApi && BRAVE_SEQUENTIAL ? 1 : CONCURRENCY;
-  const sleepBetweenChunks = usingRealApi ? BRAVE_RPS_SLEEP_MS : 0;
-
-  for (let i = 0; i < batch.length; i += effectiveConcurrency) {
-    const chunk = batch.slice(i, i + effectiveConcurrency);
+  for (let i = 0; i < batch.length; i += CONCURRENCY) {
+    const chunk = batch.slice(i, i + CONCURRENCY);
     await Promise.all(
       chunk.map(async (account) => {
         try {
@@ -135,9 +128,6 @@ export async function runStage2Batch(runId: string): Promise<Stage2Result> {
         }
       }),
     );
-    if (sleepBetweenChunks > 0 && i + effectiveConcurrency < batch.length) {
-      await sleep(sleepBetweenChunks);
-    }
   }
 
   // Stage 1 already set total/excluded/ready; we don't change those on Stage 2.
@@ -534,10 +524,10 @@ async function enrichOne(
         email: c.email,
         linkedin: c.linkedin,
         tier: c.tier,
-        // c.source is set by chainContactProviders to the actual winning
-        // provider (e.g. "zoominfo-rest"). Fall back to chain name only if
-        // somehow unset.
-        source: c.source ?? getContactProvider().name,
+        // sources[] is populated by each provider with its own name. After
+        // the aggregator's Claude dedup, a multi-source person has all their
+        // attributions unioned (e.g. ["zoominfo-rest", "linkedin"]).
+        sources: c.sources,
         outreach_angle: c.outreachAngle,
         likely_challenge: c.likelyChallenge,
       }));

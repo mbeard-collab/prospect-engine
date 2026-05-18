@@ -1,0 +1,15 @@
+# Netlify build config for Prospect Engine (Next.js 16 App Router).
+#
+# Netlify auto-installs @netlify/plugin-nextjs when it detects a Next.js
+# project, so we don't list it here. The plugin handles serverless functions
+# for server actions, API routes, and the proxy.ts middleware replacement.
+
+[build]
+  command = "npm run build"
+  publish = ".next"
+
+[build.environment]
+  # Next.js 16 requires Node 20+.
+  NODE_VERSION = "20"
+  # The build runs on Linux; pin npm's optional native deps for sharp etc.
+  NPM_FLAGS = "--include=optional"

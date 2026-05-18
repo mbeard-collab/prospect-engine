@@ -99,6 +99,7 @@ export function createMockContactProvider(): ContactProvider {
             : tier === "manager"
               ? "Direct line manager for SLED account execs."
               : "Day-to-day quota carrier for state-and-local accounts.",
+          sources: ["mock"],
         });
       }
 

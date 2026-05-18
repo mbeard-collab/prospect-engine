@@ -150,6 +150,7 @@ function parseContactsJson(text: string): EnrichedContact[] {
       email: (c.email as string | null) ?? null,
       linkedin: (c.linkedin as string | null) ?? null,
       rationale: (c.rationale as string | null) ?? null,
+      sources: ["zoominfo-mcp"],
     });
   }
   return out;

@@ -101,6 +101,9 @@ export type AccountRow = {
     tier: "exec" | "manager" | "ic";
     email: string | null;
     linkedin: string | null;
+    // Provider provenance from Stage 3 aggregator. Multi-source = the same
+    // person was found by 2+ providers (corroborated).
+    sources: string[];
     // SDR-facing per-contact notes from Stage 3 tailoring. Null when the
     // tailoring call failed or was skipped (no Anthropic key).
     outreachAngle: string | null;
@@ -452,7 +455,7 @@ export function AccountsTable({
                           <ul className="space-y-2">
                             {r.contacts.map((c, i) => (
                               <li key={i} className="text-sm">
-                                <div className="flex items-baseline gap-2">
+                                <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
                                   <span className="rounded border bg-background px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
                                     {TIER_LABEL[c.tier]}
                                   </span>
@@ -460,6 +463,13 @@ export function AccountsTable({
                                   <span className="text-muted-foreground">
                                     — {c.title}
                                   </span>
+                                  {c.sources.length > 0 ? (
+                                    <span className="ml-1 flex flex-wrap gap-1">
+                                      {c.sources.map((s) => (
+                                        <SourceChip key={s} source={s} />
+                                      ))}
+                                    </span>
+                                  ) : null}
                                 </div>
                                 <div className="ml-1 text-xs text-muted-foreground">
                                   {c.email ? (
@@ -872,6 +882,55 @@ function ConfidenceReasons({ c }: { c: Confidence }) {
         </div>
       ) : null}
     </div>
+  );
+}
+
+// Source provenance chip for a contact. Each contact carries an array of
+// provider names that found them; a multi-source contact (e.g. ZoomInfo +
+// LinkedIn) is corroborated and gets multiple chips. Color encodes the
+// general source family — structured (ZoomInfo) vs web (LinkedIn / website)
+// vs internal (GovSpend) — so the SDR can scan at a glance.
+const SOURCE_STYLE: Record<string, { label: string; cls: string }> = {
+  "zoominfo-rest": {
+    label: "ZoomInfo",
+    cls: "border-violet-500/40 bg-violet-50 text-violet-700 dark:bg-violet-950 dark:text-violet-300",
+  },
+  "zoominfo-mcp": {
+    label: "ZoomInfo MCP",
+    cls: "border-violet-500/40 bg-violet-50 text-violet-700 dark:bg-violet-950 dark:text-violet-300",
+  },
+  linkedin: {
+    label: "LinkedIn",
+    cls: "border-sky-500/40 bg-sky-50 text-sky-700 dark:bg-sky-950 dark:text-sky-300",
+  },
+  "company-website": {
+    label: "Website",
+    cls: "border-slate-500/40 bg-slate-50 text-slate-700 dark:bg-slate-900 dark:text-slate-300",
+  },
+  "govspend-contracts": {
+    label: "GovSpend",
+    cls: "border-emerald-500/40 bg-emerald-50 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300",
+  },
+  mock: {
+    label: "Mock",
+    cls: "border-amber-500/40 bg-amber-50 text-amber-700 dark:bg-amber-950 dark:text-amber-300",
+  },
+};
+
+function SourceChip({ source }: { source: string }) {
+  const meta = SOURCE_STYLE[source] ?? {
+    label: source,
+    cls: "border-muted bg-muted/30 text-muted-foreground",
+  };
+  return (
+    <span
+      className={cn(
+        "rounded border px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide",
+        meta.cls,
+      )}
+    >
+      {meta.label}
+    </span>
   );
 }
 

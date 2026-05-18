@@ -7,10 +7,12 @@ export type EnrichedContact = {
   email: string | null;
   linkedin: string | null;
   rationale: string | null;
-  // Set by the chain wrapper after a provider returns ≥1 contact. Identifies
-  // which provider actually produced this contact — distinct from the chain
-  // name. Optional because individual providers don't set it themselves.
-  source?: string;
+  // Provenance: one entry per provider that found this contact. When
+  // multiple providers find the same person (e.g. ZoomInfo and LinkedIn
+  // both surface Joe Smith), the aggregator merges them into one record
+  // and unions the sources. Providers set this themselves to the name of
+  // their own provider (e.g. ["zoominfo-rest"]).
+  sources: string[];
 };
 
 export type SignalType =
